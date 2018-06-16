@@ -10,16 +10,32 @@
 //  You can do whatever you want with this file.
 //
 ///////////////////////////////////////////////////////////////////////////////
-
+#include <stdio.h>
 #include "lzma2_encoder.h"
 #include "lzma_encoder_private.h"
 #include "fastpos.h"
-
+#include "../rangecoder/range_encoder.h"
 
 /////////////
 // Literal //
 /////////////
-
+#define DIST_MASK 0
+#define CLEN_MASK 0
+#define SELECT_MASK 1
+#define LITERAL_MASK 0
+#define dist_rc_bit(a, b, c) rc_bit(DIST_MASK,a,b,c)
+#define dist_rc_direct(a, b, c) rc_direct(DIST_MASK,a,b,c)
+#define dist_rc_bittree_reverse(a, b, c, d) rc_bittree_reverse(DIST_MASK,a,b,c,d)
+#define dist_rc_bittree(a, b, c, d) rc_bittree(DIST_MASK,a,b,c,d)
+#define clen_rc_bit(a, b, c) rc_bit(CLEN_MASK,a,b,c)
+#define clen_rc_bittree(a, b, c, d) rc_bittree(CLEN_MASK,a,b,c,d)
+#define select_rc_bit(a, b, c) rc_bit(SELECT_MASK,a,b,c)
+#define select_rc_bittree(a, b, c, d) rc_bit(SELECT_MASK,a,b,c)
+#define lit_rc_bit(a, b, c) rc_bit(LITERAL_MASK,a,b,c)
+#define lit_rc_bittree(a, b, c, d) rc_bittree(LITERAL_MASK,a,b,c,d)
+#define misc_rc_bit(a, b, c) rc_bit(1,a,b,c)
+#define misc_rc_bittree(a, b, c, d) rc_bittree(1,a,b,c,d)
+#define xfprintf(a,...)
 static inline void
 literal_matched(lzma_range_encoder *rc, probability *subcoder,
 		uint32_t match_byte, uint32_t symbol)
@@ -33,7 +49,7 @@ literal_matched(lzma_range_encoder *rc, probability *subcoder,
 		const uint32_t subcoder_index
 				= offset + match_bit + (symbol >> 8);
 		const uint32_t bit = (symbol >> 7) & 1;
-		rc_bit(rc, &subcoder[subcoder_index], bit);
+		lit_rc_bit(rc, &subcoder[subcoder_index], bit);
 
 		symbol <<= 1;
 		offset &= ~(match_byte ^ symbol);
@@ -48,14 +64,17 @@ literal(lzma_lzma1_encoder *coder, lzma_mf *mf, uint32_t position)
 	// Locate the literal byte to be encoded and the subcoder.
 	const uint8_t cur_byte = mf->buffer[
 			mf->read_pos - mf->read_ahead];
+    xfprintf(stderr, "LIT %02x\n", cur_byte);
 	probability *subcoder = literal_subcoder(coder->literal,
 			coder->literal_context_bits, coder->literal_pos_mask,
 			position, mf->buffer[mf->read_pos - mf->read_ahead - 1]);
-
+    /*fprintf(stderr, "PRI lcbit: %02x posmask: %02x position: %02x buf:%02x\n",
+			coder->literal_context_bits, coder->literal_pos_mask,
+			position, mf->buffer[mf->read_pos - mf->read_ahead - 1]);*/
 	if (is_literal_state(coder->state)) {
 		// Previous LZMA-symbol was a literal. Encode a normal
 		// literal without a match byte.
-		rc_bittree(&coder->rc, subcoder, 8, cur_byte);
+		lit_rc_bittree(&coder->rc, subcoder, 8, cur_byte);
 	} else {
 		// Previous LZMA-symbol was a match. Use the last byte of
 		// the match as a "match byte". That is, compare the bits
@@ -111,19 +130,19 @@ length(lzma_range_encoder *rc, lzma_length_encoder *lc,
 	len -= MATCH_LEN_MIN;
 
 	if (len < LEN_LOW_SYMBOLS) {
-		rc_bit(rc, &lc->choice, 0);
-		rc_bittree(rc, lc->low[pos_state], LEN_LOW_BITS, len);
+		clen_rc_bit(rc, &lc->choice, 0);
+		clen_rc_bittree(rc, lc->low[pos_state], LEN_LOW_BITS, len);
 	} else {
-		rc_bit(rc, &lc->choice, 1);
+		clen_rc_bit(rc, &lc->choice, 1);
 		len -= LEN_LOW_SYMBOLS;
 
 		if (len < LEN_MID_SYMBOLS) {
-			rc_bit(rc, &lc->choice2, 0);
-			rc_bittree(rc, lc->mid[pos_state], LEN_MID_BITS, len);
+			clen_rc_bit(rc, &lc->choice2, 0);
+			clen_rc_bittree(rc, lc->mid[pos_state], LEN_MID_BITS, len);
 		} else {
-			rc_bit(rc, &lc->choice2, 1);
+			clen_rc_bit(rc, &lc->choice2, 1);
 			len -= LEN_MID_SYMBOLS;
-			rc_bittree(rc, lc->high, LEN_HIGH_BITS, len);
+			clen_rc_bittree(rc, lc->high, LEN_HIGH_BITS, len);
 		}
 	}
 
@@ -143,6 +162,7 @@ static inline void
 match(lzma_lzma1_encoder *coder, const uint32_t pos_state,
 		const uint32_t distance, const uint32_t len)
 {
+    xfprintf(stderr,"copy %d from %d\n", len, distance + 1);
 	update_match(coder->state);
 
 	length(&coder->rc, &coder->match_len_encoder, pos_state, len,
@@ -150,7 +170,7 @@ match(lzma_lzma1_encoder *coder, const uint32_t pos_state,
 
 	const uint32_t dist_slot = get_dist_slot(distance);
 	const uint32_t dist_state = get_dist_state(len);
-	rc_bittree(&coder->rc, coder->dist_slot[dist_state],
+	dist_rc_bittree(&coder->rc, coder->dist_slot[dist_state],
 			DIST_SLOT_BITS, dist_slot);
 
 	if (dist_slot >= DIST_MODEL_START) {
@@ -160,14 +180,14 @@ match(lzma_lzma1_encoder *coder, const uint32_t pos_state,
 
 		if (dist_slot < DIST_MODEL_END) {
 			// Careful here: base - dist_slot - 1 can be -1, but
-			// rc_bittree_reverse starts at probs[1], not probs[0].
-			rc_bittree_reverse(&coder->rc,
-				coder->dist_special + base - dist_slot - 1,
+            // rc_bittree_reverse starts at probs[1], not probs[0].
+			dist_rc_bittree_reverse(&coder->rc,
+		    	coder->dist_special + base - dist_slot - 1,
 				footer_bits, dist_reduced);
 		} else {
-			rc_direct(&coder->rc, dist_reduced >> ALIGN_BITS,
+			dist_rc_direct(&coder->rc, dist_reduced >> ALIGN_BITS,
 					footer_bits - ALIGN_BITS);
-			rc_bittree_reverse(
+			dist_rc_bittree_reverse(
 					&coder->rc, coder->dist_align,
 					ALIGN_BITS, dist_reduced & ALIGN_MASK);
 			++coder->align_price_count;
@@ -190,20 +210,21 @@ static inline void
 rep_match(lzma_lzma1_encoder *coder, const uint32_t pos_state,
 		const uint32_t rep, const uint32_t len)
 {
+    xfprintf(stderr,"copy %d from %d\n", len, coder->reps[rep] + 1);
 	if (rep == 0) {
-		rc_bit(&coder->rc, &coder->is_rep0[coder->state], 0);
-		rc_bit(&coder->rc,
+		dist_rc_bit(&coder->rc, &coder->is_rep0[coder->state], 0);
+		clen_rc_bit(&coder->rc,
 				&coder->is_rep0_long[coder->state][pos_state],
 				len != 1);
 	} else {
 		const uint32_t distance = coder->reps[rep];
-		rc_bit(&coder->rc, &coder->is_rep0[coder->state], 1);
+		dist_rc_bit(&coder->rc, &coder->is_rep0[coder->state], 1);
 
 		if (rep == 1) {
-			rc_bit(&coder->rc, &coder->is_rep1[coder->state], 0);
+			dist_rc_bit(&coder->rc, &coder->is_rep1[coder->state], 0);
 		} else {
-			rc_bit(&coder->rc, &coder->is_rep1[coder->state], 1);
-			rc_bit(&coder->rc, &coder->is_rep2[coder->state],
+			dist_rc_bit(&coder->rc, &coder->is_rep1[coder->state], 1);
+			dist_rc_bit(&coder->rc, &coder->is_rep2[coder->state],
 					rep - 2);
 
 			if (rep == 3)
@@ -235,26 +256,26 @@ encode_symbol(lzma_lzma1_encoder *coder, lzma_mf *mf,
 		uint32_t back, uint32_t len, uint32_t position)
 {
 	const uint32_t pos_state = position & coder->pos_mask;
-
+    fprintf(stderr, "POS_STATE: %x & %x = %x\n", position , coder->pos_mask, pos_state);
 	if (back == UINT32_MAX) {
 		// Literal i.e. eight-bit byte
 		assert(len == 1);
-		rc_bit(&coder->rc,
+		select_rc_bit(&coder->rc,
 				&coder->is_match[coder->state][pos_state], 0);
 		literal(coder, mf, position);
 	} else {
 		// Some type of match
-		rc_bit(&coder->rc,
+	    select_rc_bit(&coder->rc,
 			&coder->is_match[coder->state][pos_state], 1);
 
 		if (back < REPS) {
 			// It's a repeated match i.e. the same distance
 			// has been used earlier.
-			rc_bit(&coder->rc, &coder->is_rep[coder->state], 1);
+			dist_rc_bit(&coder->rc, &coder->is_rep[coder->state], 1);
 			rep_match(coder, pos_state, back, len);
 		} else {
 			// Normal match
-			rc_bit(&coder->rc, &coder->is_rep[coder->state], 0);
+			dist_rc_bit(&coder->rc, &coder->is_rep[coder->state], 0);
 			match(coder, pos_state, back - REPS, len);
 		}
 	}
@@ -281,8 +302,8 @@ encode_init(lzma_lzma1_encoder *coder, lzma_mf *mf)
 		// always be a literal.
 		mf_skip(mf, 1);
 		mf->read_ahead = 0;
-		rc_bit(&coder->rc, &coder->is_match[0][0], 0);
-		rc_bittree(&coder->rc, coder->literal[0], 8, mf->buffer[0]);
+		misc_rc_bit(&coder->rc, &coder->is_match[0][0], 0);
+		misc_rc_bittree(&coder->rc, coder->literal[0], 8, mf->buffer[0]);
 	}
 
 	// Initialization is done (except if empty file).
@@ -296,8 +317,8 @@ static void
 encode_eopm(lzma_lzma1_encoder *coder, uint32_t position)
 {
 	const uint32_t pos_state = position & coder->pos_mask;
-	rc_bit(&coder->rc, &coder->is_match[coder->state][pos_state], 1);
-	rc_bit(&coder->rc, &coder->is_rep[coder->state], 0);
+	misc_rc_bit(&coder->rc, &coder->is_match[coder->state][pos_state], 1);
+	misc_rc_bit(&coder->rc, &coder->is_rep[coder->state], 0);
 	match(coder, pos_state, UINT32_MAX, MATCH_LEN_MIN);
 }
 

@@ -116,13 +116,14 @@ typedef enum {
 
 /// Maximum number of literal coders
 #define LITERAL_CODERS_MAX (1 << LZMA_LCLP_MAX)
-
+#include<stdio.h>
 /// Locate the literal coder for the next literal byte. The choice depends on
 ///   - the lowest literal_pos_bits bits of the position of the current
 ///     byte; and
 ///   - the highest literal_context_bits bits of the previous byte.
 #define literal_subcoder(probs, lc, lp_mask, pos, prev_byte) \
-	((probs)[(((pos) & lp_mask) << lc) + ((prev_byte) >> (8 - lc))])
+    (/*fprintf(stderr,"INDEX %02x -> %d\n",(int)prev_byte, (int)((((pos) & lp_mask) << lc) + ((prev_byte) >> (8 - lc)))),*/ \
+    ((probs)[(((pos) & lp_mask) << lc) + ((prev_byte) >> (8 - lc))]))
 
 
 static inline void

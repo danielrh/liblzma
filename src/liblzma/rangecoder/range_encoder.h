@@ -47,7 +47,7 @@ typedef struct {
 
 	/// Probabilities associated with RC_BIT_0 or RC_BIT_1
 	probability *probs[RC_SYMBOLS_MAX];
-
+    int masks[RC_SYMBOLS_MAX];
 } lzma_range_encoder;
 
 
@@ -64,30 +64,31 @@ rc_reset(lzma_range_encoder *rc)
 
 
 static inline void
-rc_bit(lzma_range_encoder *rc, probability *prob, uint32_t bit)
+rc_bit(int shouldwrite, lzma_range_encoder *rc, probability *prob, uint32_t bit)
 {
 	rc->symbols[rc->count] = bit;
 	rc->probs[rc->count] = prob;
+    rc->masks[rc->count] = shouldwrite;
 	++rc->count;
 }
 
 
 static inline void
-rc_bittree(lzma_range_encoder *rc, probability *probs,
+rc_bittree(int shouldwrite, lzma_range_encoder *rc, probability *probs,
 		uint32_t bit_count, uint32_t symbol)
 {
 	uint32_t model_index = 1;
 
 	do {
 		const uint32_t bit = (symbol >> --bit_count) & 1;
-		rc_bit(rc, &probs[model_index], bit);
+		rc_bit(shouldwrite, rc, &probs[model_index], bit);
 		model_index = (model_index << 1) + bit;
 	} while (bit_count != 0);
 }
 
 
 static inline void
-rc_bittree_reverse(lzma_range_encoder *rc, probability *probs,
+rc_bittree_reverse(int shouldwrite, lzma_range_encoder *rc, probability *probs,
 		uint32_t bit_count, uint32_t symbol)
 {
 	uint32_t model_index = 1;
@@ -95,19 +96,21 @@ rc_bittree_reverse(lzma_range_encoder *rc, probability *probs,
 	do {
 		const uint32_t bit = symbol & 1;
 		symbol >>= 1;
-		rc_bit(rc, &probs[model_index], bit);
+		rc_bit(shouldwrite, rc, &probs[model_index], bit);
 		model_index = (model_index << 1) + bit;
 	} while (--bit_count != 0);
 }
 
 
 static inline void
-rc_direct(lzma_range_encoder *rc,
+rc_direct(int shouldwrite, lzma_range_encoder *rc,
 		uint32_t value, uint32_t bit_count)
 {
 	do {
-		rc->symbols[rc->count++]
+		rc->symbols[rc->count]
 				= RC_DIRECT_0 + ((value >> --bit_count) & 1);
+        rc->masks[rc->count] = shouldwrite;
+        rc->count++;
 	} while (bit_count != 0);
 }
 
@@ -115,8 +118,10 @@ rc_direct(lzma_range_encoder *rc,
 static inline void
 rc_flush(lzma_range_encoder *rc)
 {
-	for (size_t i = 0; i < 5; ++i)
+	for (size_t i = 0; i < 5; ++i) {
 		rc->symbols[rc->count++] = RC_FLUSH;
+        rc->masks[rc->count++] = 0x1;
+    }
 }
 
 
@@ -160,13 +165,14 @@ rc_encode(lzma_range_encoder *rc,
 
 			rc->range <<= RC_SHIFT_BITS;
 		}
-
 		// Encode a bit
 		switch (rc->symbols[rc->pos]) {
 		case RC_BIT_0: {
 			probability prob = *rc->probs[rc->pos];
-			rc->range = (rc->range >> RC_BIT_MODEL_TOTAL_BITS)
+            if (rc->masks[rc->pos]!=0) {
+                rc->range = (rc->range >> RC_BIT_MODEL_TOTAL_BITS)
 					* prob;
+            }
 			prob += (RC_BIT_MODEL_TOTAL - prob) >> RC_MOVE_BITS;
 			*rc->probs[rc->pos] = prob;
 			break;
@@ -176,20 +182,26 @@ rc_encode(lzma_range_encoder *rc,
 			probability prob = *rc->probs[rc->pos];
 			const uint32_t bound = prob * (rc->range
 					>> RC_BIT_MODEL_TOTAL_BITS);
-			rc->low += bound;
-			rc->range -= bound;
+            if (rc->masks[rc->pos]!=0) {
+                rc->low += bound;
+                rc->range -= bound;
+            }
 			prob -= prob >> RC_MOVE_BITS;
 			*rc->probs[rc->pos] = prob;
 			break;
 		}
 
 		case RC_DIRECT_0:
-			rc->range >>= 1;
+          if (rc->masks[rc->pos]!=0) {
+              rc->range >>= 1;
+          }
 			break;
 
 		case RC_DIRECT_1:
-			rc->range >>= 1;
-			rc->low += rc->range;
+          if (rc->masks[rc->pos]!=0) {
+              rc->range >>= 1;
+              rc->low += rc->range;
+          }
 			break;
 
 		case RC_FLUSH:

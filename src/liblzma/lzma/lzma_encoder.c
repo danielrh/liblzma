@@ -10,7 +10,7 @@
 //  You can do whatever you want with this file.
 //
 ///////////////////////////////////////////////////////////////////////////////
-
+#include<stdio.h>
 #include "lzma2_encoder.h"
 #include "lzma_encoder_private.h"
 #include "fastpos.h"
@@ -48,6 +48,7 @@ literal(lzma_lzma1_encoder *coder, lzma_mf *mf, uint32_t position)
 	// Locate the literal byte to be encoded and the subcoder.
 	const uint8_t cur_byte = mf->buffer[
 			mf->read_pos - mf->read_ahead];
+    fprintf(stderr, "insert 1 %02x\n", cur_byte);
 	probability *subcoder = literal_subcoder(coder->literal,
 			coder->literal_context_bits, coder->literal_pos_mask,
 			position, mf->buffer[mf->read_pos - mf->read_ahead - 1]);
@@ -143,6 +144,7 @@ static inline void
 match(lzma_lzma1_encoder *coder, const uint32_t pos_state,
 		const uint32_t distance, const uint32_t len)
 {
+    fprintf(stderr,"copy %d from %d\n", len, distance + 1);
 	update_match(coder->state);
 
 	length(&coder->rc, &coder->match_len_encoder, pos_state, len,
@@ -190,6 +192,7 @@ static inline void
 rep_match(lzma_lzma1_encoder *coder, const uint32_t pos_state,
 		const uint32_t rep, const uint32_t len)
 {
+    fprintf(stderr,"copy %d from %d\n", len, coder->reps[rep] + 1);
 	if (rep == 0) {
 		rc_bit(&coder->rc, &coder->is_rep0[coder->state], 0);
 		rc_bit(&coder->rc,

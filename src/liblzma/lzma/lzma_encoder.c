@@ -20,13 +20,18 @@
 // Literal //
 /////////////
 #define DIST_MASK 0
+#define DIRECT_DIST_MASK 0
+#define MNEMONIC_DIST_MASK 1
 #define CLEN_MASK 0
-#define SELECT_MASK 1
+#define SELECT_MASK 0
 #define LITERAL_MASK 0
+#define SLOT_MASK 0
+#define mnemonic_dist_rc_bit(a, b, c) rc_bit(MNEMONIC_DIST_MASK,a,b,c)
 #define dist_rc_bit(a, b, c) rc_bit(DIST_MASK,a,b,c)
-#define dist_rc_direct(a, b, c) rc_direct(DIST_MASK,a,b,c)
+#define dist_rc_direct(a, b, c) rc_direct(DIRECT_DIST_MASK,a,b,c)
 #define dist_rc_bittree_reverse(a, b, c, d) rc_bittree_reverse(DIST_MASK,a,b,c,d)
 #define dist_rc_bittree(a, b, c, d) rc_bittree(DIST_MASK,a,b,c,d)
+#define slot_rc_bittree(a, b, c, d) rc_bittree(SLOT_MASK,a,b,c,d)
 #define clen_rc_bit(a, b, c) rc_bit(CLEN_MASK,a,b,c)
 #define clen_rc_bittree(a, b, c, d) rc_bittree(CLEN_MASK,a,b,c,d)
 #define select_rc_bit(a, b, c) rc_bit(SELECT_MASK,a,b,c)
@@ -170,7 +175,7 @@ match(lzma_lzma1_encoder *coder, const uint32_t pos_state,
 
 	const uint32_t dist_slot = get_dist_slot(distance);
 	const uint32_t dist_state = get_dist_state(len);
-	dist_rc_bittree(&coder->rc, coder->dist_slot[dist_state],
+	slot_rc_bittree(&coder->rc, coder->dist_slot[dist_state],
 			DIST_SLOT_BITS, dist_slot);
 
 	if (dist_slot >= DIST_MODEL_START) {
@@ -212,19 +217,19 @@ rep_match(lzma_lzma1_encoder *coder, const uint32_t pos_state,
 {
     xfprintf(stderr,"copy %d from %d\n", len, coder->reps[rep] + 1);
 	if (rep == 0) {
-		dist_rc_bit(&coder->rc, &coder->is_rep0[coder->state], 0);
-		clen_rc_bit(&coder->rc,
+		mnemonic_dist_rc_bit(&coder->rc, &coder->is_rep0[coder->state], 0);
+		mnemonic_dist_rc_bit(&coder->rc,
 				&coder->is_rep0_long[coder->state][pos_state],
 				len != 1);
 	} else {
 		const uint32_t distance = coder->reps[rep];
-		dist_rc_bit(&coder->rc, &coder->is_rep0[coder->state], 1);
+		mnemonic_dist_rc_bit(&coder->rc, &coder->is_rep0[coder->state], 1);
 
 		if (rep == 1) {
-			dist_rc_bit(&coder->rc, &coder->is_rep1[coder->state], 0);
+			mnemonic_dist_rc_bit(&coder->rc, &coder->is_rep1[coder->state], 0);
 		} else {
-			dist_rc_bit(&coder->rc, &coder->is_rep1[coder->state], 1);
-			dist_rc_bit(&coder->rc, &coder->is_rep2[coder->state],
+			mnemonic_dist_rc_bit(&coder->rc, &coder->is_rep1[coder->state], 1);
+			mnemonic_dist_rc_bit(&coder->rc, &coder->is_rep2[coder->state],
 					rep - 2);
 
 			if (rep == 3)
@@ -256,7 +261,7 @@ encode_symbol(lzma_lzma1_encoder *coder, lzma_mf *mf,
 		uint32_t back, uint32_t len, uint32_t position)
 {
 	const uint32_t pos_state = position & coder->pos_mask;
-    fprintf(stderr, "POS_STATE: %x & %x = %x\n", position , coder->pos_mask, pos_state);
+    //fprintf(stderr, "POS_STATE: %x & %x = %x\n", position , coder->pos_mask, pos_state);
 	if (back == UINT32_MAX) {
 		// Literal i.e. eight-bit byte
 		assert(len == 1);
@@ -271,11 +276,11 @@ encode_symbol(lzma_lzma1_encoder *coder, lzma_mf *mf,
 		if (back < REPS) {
 			// It's a repeated match i.e. the same distance
 			// has been used earlier.
-			dist_rc_bit(&coder->rc, &coder->is_rep[coder->state], 1);
+			mnemonic_dist_rc_bit(&coder->rc, &coder->is_rep[coder->state], 1);
 			rep_match(coder, pos_state, back, len);
 		} else {
 			// Normal match
-			dist_rc_bit(&coder->rc, &coder->is_rep[coder->state], 0);
+			mnemonic_dist_rc_bit(&coder->rc, &coder->is_rep[coder->state], 0);
 			match(coder, pos_state, back - REPS, len);
 		}
 	}

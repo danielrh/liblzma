@@ -134,6 +134,9 @@ struct lzma_lzma1_encoder_s {
 	uint32_t opts_end_index;
 	uint32_t opts_current_index;
 	lzma_optimal opts[OPTS];
+
+	uint64_t read_pos;
+	uint32_t literals_buffered;
 };
 
 

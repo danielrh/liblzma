@@ -40,7 +40,18 @@ literal_matched(lzma_range_encoder *rc, probability *subcoder,
 
 	} while (symbol < (UINT32_C(1) << 16));
 }
-
+static inline void flush_ir(lzma_lzma1_encoder *coder, lzma_mf *mf) {
+    uint32_t i;
+    if (coder-> literals_buffered) {
+        fprintf(stderr, "insert %d ", coder->literals_buffered);
+        for (i = 0; i < coder->literals_buffered; ++i) {
+            fprintf(stderr, "%02x", mf->buffer[coder->read_pos]);
+            ++coder->read_pos;
+        }
+        fprintf(stderr, "\n");
+    }
+    coder->literals_buffered = 0;
+}
 
 static inline void
 literal(lzma_lzma1_encoder *coder, lzma_mf *mf, uint32_t position)
@@ -48,7 +59,6 @@ literal(lzma_lzma1_encoder *coder, lzma_mf *mf, uint32_t position)
 	// Locate the literal byte to be encoded and the subcoder.
 	const uint8_t cur_byte = mf->buffer[
 			mf->read_pos - mf->read_ahead];
-    fprintf(stderr, "insert 1 %02x\n", cur_byte);
 	probability *subcoder = literal_subcoder(coder->literal,
 			coder->literal_context_bits, coder->literal_pos_mask,
 			position, mf->buffer[mf->read_pos - mf->read_ahead - 1]);
@@ -58,6 +68,7 @@ literal(lzma_lzma1_encoder *coder, lzma_mf *mf, uint32_t position)
 		// literal without a match byte.
 		rc_bittree(&coder->rc, subcoder, 8, cur_byte);
 	} else {
+		coder->read_pos = mf->read_pos - mf->read_ahead;
 		// Previous LZMA-symbol was a match. Use the last byte of
 		// the match as a "match byte". That is, compare the bits
 		// of the current literal and the match byte.
@@ -66,7 +77,7 @@ literal(lzma_lzma1_encoder *coder, lzma_mf *mf, uint32_t position)
 				- mf->read_ahead];
 		literal_matched(&coder->rc, subcoder, match_byte, cur_byte);
 	}
-
+	coder->literals_buffered += 1;
 	update_literal(coder->state);
 }
 
@@ -246,6 +257,7 @@ encode_symbol(lzma_lzma1_encoder *coder, lzma_mf *mf,
 				&coder->is_match[coder->state][pos_state], 0);
 		literal(coder, mf, position);
 	} else {
+        flush_ir(coder, mf);
 		// Some type of match
 		rc_bit(&coder->rc,
 			&coder->is_match[coder->state][pos_state], 1);
@@ -280,12 +292,24 @@ encode_init(lzma_lzma1_encoder *coder, lzma_mf *mf)
 		assert(mf->write_pos == mf->read_pos);
 		assert(mf->action == LZMA_FINISH);
 	} else {
+        uint64_t window_size = mf->keep_size_before + mf->keep_size_after;
+        int lg_window_size = 0;
+        uint64_t tmp = window_size;
+        while (tmp) {
+            lg_window_size +=1;
+            tmp >>= 1;
+        }
+        fprintf(stderr, "window %d 0 0 0\n", lg_window_size);
 		// Do the actual initialization. The first LZMA symbol must
 		// always be a literal.
 		mf_skip(mf, 1);
 		mf->read_ahead = 0;
 		rc_bit(&coder->rc, &coder->is_match[0][0], 0);
 		rc_bittree(&coder->rc, coder->literal[0], 8, mf->buffer[0]);
+
+		coder->read_pos = 0;
+		coder->literals_buffered = 1;
+
 	}
 
 	// Initialization is done (except if empty file).
@@ -395,6 +419,7 @@ lzma_lzma_encode(lzma_lzma1_encoder *restrict coder, lzma_mf *restrict mf,
 			assert(limit == UINT32_MAX);
 			return LZMA_OK;
 		}
+		flush_ir(coder, mf);
 	}
 
 	// Make it ready for the next LZMA2 chunk.
@@ -603,7 +628,8 @@ lzma_lzma_encoder_create(void **coder_ptr,
 	coder->is_flushed = false;
 
 	set_lz_options(lz_options, options);
-
+	coder->read_pos = 0;
+	coder->literals_buffered = 0;
 	return lzma_lzma_encoder_reset(coder, options);
 }
 
